@@ -1,0 +1,13 @@
+C:\PROJ\CompressDecompress_\bin\Debug\netcoreapp3.1\GZipTest.exe
+C:\PROJ\CompressDecompress_\bin\Debug\netcoreapp3.1\GZipTest.deps.json
+C:\PROJ\CompressDecompress_\bin\Debug\netcoreapp3.1\GZipTest.runtimeconfig.json
+C:\PROJ\CompressDecompress_\bin\Debug\netcoreapp3.1\GZipTest.runtimeconfig.dev.json
+C:\PROJ\CompressDecompress_\bin\Debug\netcoreapp3.1\GZipTest.dll
+C:\PROJ\CompressDecompress_\bin\Debug\netcoreapp3.1\GZipTest.pdb
+C:\PROJ\CompressDecompress_\obj\Debug\netcoreapp3.1\GZipTest.AssemblyInfoInputs.cache
+C:\PROJ\CompressDecompress_\obj\Debug\netcoreapp3.1\GZipTest.AssemblyInfo.cs
+C:\PROJ\CompressDecompress_\obj\Debug\netcoreapp3.1\GZipTest.csproj.CoreCompileInputs.cache
+C:\PROJ\CompressDecompress_\obj\Debug\netcoreapp3.1\GZipTest.dll
+C:\PROJ\CompressDecompress_\obj\Debug\netcoreapp3.1\GZipTest.pdb
+C:\PROJ\CompressDecompress_\obj\Debug\netcoreapp3.1\GZipTest.genruntimeconfig.cache
+C:\PROJ\CompressDecompress_\obj\Debug\netcoreapp3.1\GZipTest.csprojAssemblyReference.cache
