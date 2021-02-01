@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -9,14 +11,17 @@ namespace GZipTest
 {
     public class Compressor : IDisposable
     {
-        private static Semaphore semaphore = new Semaphore(1, 1);
+        static AutoResetEvent autoResetEvent = new AutoResetEvent(true);
         private Stream sourceStream;
         private Stream targetStream;
+
+        private int noOfChunks;
 
         public Compressor(string inputStreamPath, string outputStreamPath)
         {
             sourceStream = OpenFile(inputStreamPath);
             targetStream = OpenFile(outputStreamPath, FileMode.Create);
+            noOfChunks = GetNumberOfChunks((double) Constants.CHUNK_SIZE_COMPRESS);
         }
 
         private Stream OpenFile(string path, FileMode mode = FileMode.Open)
@@ -27,7 +32,7 @@ namespace GZipTest
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error occured while accessing the file.\n {ex}");
+                Console.WriteLine($"Error occurred while accessing the file.\n {ex}");
             }
             return null;
         }
@@ -36,32 +41,47 @@ namespace GZipTest
         {
             if (sourceStream == null || targetStream == null)
                 return false;
+            Thread[] workingThreads = new Thread[noOfChunks];
             byte[] buffer = new byte[Constants.CHUNK_SIZE_COMPRESS];
+            List<MemoryStream> results = new List<MemoryStream>();
 
-            Task<MemoryStream>[] tasks = new Task<MemoryStream>[GetNumberOfRequiredTasks((double)Constants.CHUNK_SIZE_COMPRESS)];
-
-            int taskCounter = 0;
-            int read = 0;
-
-            while (0 != (read = sourceStream.Read(buffer, 0, Constants.CHUNK_SIZE_COMPRESS)))
+            try
             {
-                tasks[taskCounter] = Task<MemoryStream>.Factory.StartNew(() => EasyCompress(buffer, read, semaphore));
-                semaphore.WaitOne();
-                taskCounter++;
-                buffer = new byte[Constants.CHUNK_SIZE_COMPRESS];
+                var index = 0;
+                while (0 != (sourceStream.Read(buffer, 0, Constants.CHUNK_SIZE_COMPRESS)))
+                {
+                    workingThreads[index] = new Thread(() =>
+                    {
+                        Debug.Print(Thread.CurrentThread.ManagedThreadId + " starts");
+                        autoResetEvent.WaitOne();
+                        results.Add(EasyCompress(buffer));
+                    });
+                    workingThreads[index].Start();
+                    index++;
+                    buffer = new byte[Constants.CHUNK_SIZE_COMPRESS];
+                }
+
+                for (int i = 0; i < workingThreads.Length; i++)
+                {
+                    workingThreads[i]?.Join();
+                }
+
+                for (int i = 0; i < results.Count; i++)
+                {
+                    var data = results[i].ToArray();
+                    byte[] lengthData = GetBytesToStore(data.Length);
+                    targetStream.Write(lengthData, 0, lengthData.Length);
+                    targetStream.Write(data, 0, data.Length);
+                }
+
+                targetStream.Flush();
+            }
+            catch(Exception e)
+            {
+                Console.WriteLine($"Operation failed. See exception for details:\n{e}");
+                return false;
             }
 
-            Task.WaitAll(tasks);
-
-            for (int i = 0; i < tasks.Length; i++)
-            {
-                var data = tasks[i].Result.ToArray();
-                byte[] lengthData = GetBytesToStore(data.Length);
-                targetStream.Write(lengthData, 0, lengthData.Length);
-                targetStream.Write(data, 0, data.Length);
-            }
-
-            targetStream.Flush();
             return true;
         }
 
@@ -70,93 +90,96 @@ namespace GZipTest
             if (sourceStream == null || targetStream == null)
                 return false;
             byte[] buffer = new byte[Constants.CHUNK_SIZE_DECOMPRESS];
-            List<byte[]> streamChunks = new List<byte[]>();
-
-            while (0 != sourceStream.Read(buffer, 0, Constants.CHUNK_SIZE_DECOMPRESS))
+            Thread[] workingThreads = new Thread[GetNumberOfChunks((double)Constants.CHUNK_SIZE_DECOMPRESS)];
+            List<MemoryStream> results = new List<MemoryStream>();
+            try
             {
-                int lengthToRead = GetLengthFromBytes(buffer);
-                byte[] buffRead = new byte[lengthToRead];
-                sourceStream.Read(buffRead, 0, lengthToRead);
-                streamChunks.Add(buffRead);
+                var index = 0;
+                while (0 != sourceStream.Read(buffer, 0, Constants.CHUNK_SIZE_DECOMPRESS))
+                {
+                    int lengthToRead = GetLengthFromBytes(buffer);
+                    byte[] buffRead = new byte[lengthToRead];
+                    sourceStream.Read(buffRead, 0, lengthToRead);
+                    Debug.Print(Thread.CurrentThread.ManagedThreadId + " starts");
+                    workingThreads[index] = new Thread(() => { results.Add(EasyDecompress(buffRead)); });
+                }
+
+                for (int i = 0; i < workingThreads.Length; i++)
+                {
+                    workingThreads[i]?.Join();
+                }
+
+
+                for (int i = 0; i < results.Count; i++)
+                {
+                    var data = results[i].ToArray();
+                    targetStream.Write(data, 0, data.Length);
+                }
+
+                targetStream.Flush();
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"Operation failed. See exception for details:\n{e}");
+                return false;
             }
 
-            Task<MemoryStream>[] tasks = new Task<MemoryStream>[streamChunks.Count];
-
-            for (int taskCounter = 0; taskCounter < streamChunks.Count; taskCounter++)
-            {
-                tasks[taskCounter] = Task<MemoryStream>.Factory.StartNew(() => EasyDecompress(streamChunks[taskCounter], semaphore));
-                semaphore.WaitOne();
-            }
-
-            Task.WaitAll(tasks);
-
-            for (int i = 0; i < tasks.Length; i++)
-            {
-                var data = tasks[i].Result.ToArray();
-                targetStream.Write(data, 0, data.Length);
-            }
-
-            targetStream.Flush();
             return true;
         }
 
-        private int GetNumberOfRequiredTasks(double chunkSize)
+        private int GetNumberOfChunks(double chunkSize)
         {
             return Convert.ToInt32(Math.Ceiling(((double)sourceStream.Length / chunkSize)));
         }
 
-        private MemoryStream EasyCompress(byte[] buffer, int length, Semaphore semaphore)
+        private MemoryStream EasyCompress(byte[] data)
         {
-            try
-            {
-                MemoryStream stream = new MemoryStream();
+            autoResetEvent.Set();
+            Debug.Print(Thread.CurrentThread.ManagedThreadId + " released the lock");
+            MemoryStream stream = new MemoryStream();
                 using (GZipStream gzStream = new GZipStream(stream, CompressionMode.Compress, true))
                 {
-                    gzStream.Write(buffer, 0, length);
+                    try
+                    {
+                        gzStream.Write(data, 0, data.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Compressing failed. See exception for details:\n{ex}");
+                        return null;
+                    }
                 }
-                semaphore.Release();
                 return stream;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Compressing failed. See exception for details:\n{ex}");
-                semaphore.Release();
-                return null;
-            }
         }
 
-        private MemoryStream EasyDecompress(byte[] buffer, Semaphore semaphore)
+        private MemoryStream EasyDecompress(byte[] data)
         {
             try
             {
+                autoResetEvent.Set();
                 MemoryStream decompressedStream = new MemoryStream();
 
-                using (MemoryStream stream = new MemoryStream(buffer))
+                using (MemoryStream stream = new MemoryStream(data))
                 {
                     using (GZipStream gzStream = new GZipStream(stream, CompressionMode.Decompress, true))
                     {
-                        byte[] decompressedBuffer = new byte[buffer.Length];
+                        byte[] decompressedBuffer = new byte[data.Length];
                         int read = 0;
-                        while (0 != (read = gzStream.Read(decompressedBuffer, 0, buffer.Length)))
+                        while (0 != (read = gzStream.Read(decompressedBuffer, 0, data.Length)))
                         {
                             decompressedStream.Write(decompressedBuffer, 0, read);
                         }
                     }
                 }
-                semaphore.Release();
                 return decompressedStream;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Decompressing failed. See exception for details:\n{ex}");
-                semaphore.Release();
                 return null;
             }
         }
-
-        //This converting solution was found on codeproject because I was constantly getting 
-        //'The archive entry was compressed using an unsupported compression method.' when trying to decompress the stream
-        //and didn't know how to deal with it
+        
         private static byte[] GetBytesToStore(int length)
         {
             int lengthToStore = System.Net.IPAddress.HostToNetworkOrder(length);
